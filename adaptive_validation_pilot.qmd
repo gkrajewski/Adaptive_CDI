@@ -1,0 +1,89 @@
+---
+title: "Polish adaptive CDIs validation pilot"
+format: html
+---
+
+
+```{r}
+#| label: setup
+#| include: false
+
+# renv::init()
+# devtools::install_github("gkrajewski/Multilada")
+
+library(tidyverse)
+library(Multilada)
+```
+
+
+## Data preparation
+
+For the time being and for the sake of simplicity we get the demo data (age, sex, person filling in,
+i.e., submitter) from the adaptive submissions only.
+There will most likely be discrepancies and we may want to look at them at some point.
+Also, checking the same vs different submitter mighht be interesting.
+
+Also we take start date as the submission date (that's how it's been implemented so far),
+but end date might be more accurate.
+
+```{r}
+#| label: prepare_ws
+
+cdi_read("cdi", "ws_pl") -> ws_responses
+
+# Cut off early test submissions (otherwise they throw errors):
+ws_responses %>% filter(start_date > "2021-07-07") -> ws_responses
+
+# Calculate sums:
+cdi_count_oneCheckboxGroup(ws_responses, "word") %>%
+     select(! type) %>% rename(score = n) -> ws_scores
+
+# Get CAT data:
+cdi_read("cdi", "ws-cat_pl_adaptive") -> ws_cat_responses
+cdi_adaptive(ws_cat_responses) -> ws_cat_results
+inner_join(ws_cat_results, ws_scores, by = "id") -> ws_comparisons
+```
+
+Seems like there are multiple entries for the same ID.
+Should be cleaned...
+
+**Better check the procedure below:**
+
+For WG comprehension scores we add **U** sums and **P** sums
+and subtract *both* sums. This way we include both those who checked **U**
+for understanding and those who checked **P** only for understanding and
+production, without counting twice those who checked both **U** and **P**.
+
+```{r}
+#| label: prepare_wg
+
+cdi_read("cdi", "wg_pl") -> wg_responses
+
+# Cut off early test submissions (otherwise they throw errors):
+wg_responses %>% filter(start_date > "2021-07-07") -> wg_responses
+
+# Calculate sums:
+cdi_count_manyCheckboxGroups(wg_responses, "word", answer = "first") %>%
+     rename(U_score = n) %>% select(id, end_date, U_score) -> wg_u_scores
+cdi_count_manyCheckboxGroups(wg_responses, "word", answer = "second") %>%
+     rename(score = n) %>% select(id, end_date, score) -> wg_p_scores
+cdi_count_manyCheckboxGroups(wg_responses, "word", answer = "both") %>%
+     rename(both_score = n) %>% select(id, end_date, both_score) %>%
+     full_join(wg_u_scores) %>% full_join(wg_p_scores) %>%
+     mutate(score = U_score + score - both_score) %>%
+     select(id, end_date, score) -> wg_u_scores
+
+# Get CAT data:
+cdi_read("cdi", "wg-cat_pl_adaptive") -> wg_cat_responses
+cdi_adaptive(wg_cat_responses) -> wg_cat_results
+
+wg_cat_results %>% filter(group == "rozumienie") %>%
+     inner_join(wg_u_scores, by = "id") -> wg_u_comparisons
+wg_cat_results %>% filter(group == "mowa") %>%
+     inner_join(wg_p_scores, by = "id") -> wg_p_comparisons
+```
+
+Seems like there are multiple entries for the same ID.
+Should be cleaned...
+
+Also, the number of IDs with both *full* and *adaptive* submissions is surprisingly low.

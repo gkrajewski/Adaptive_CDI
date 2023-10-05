@@ -13,10 +13,12 @@ format: html
 
 library(tidyverse)
 library(Multilada)
+library(corrr)
+library(knitr)
 ```
 
 
-## Data preparation
+## Data preparation - WS
 
 For the time being and for the sake of simplicity we get the demo data (age, sex, person filling in,
 i.e., submitter) from the adaptive submissions only.
@@ -40,12 +42,83 @@ cdi_count_oneCheckboxGroup(ws_responses, "word") %>%
 
 # Get CAT data:
 cdi_read("cdi", "ws-cat_pl_adaptive") -> ws_cat_responses
+
+# ws_cat_ids - how many ids
+ws_cat_ids <- ws_cat_responses %>% select(idx, end_date) %>% unique()
+ws_cat_responses$idx[ws_cat_responses$idx == "cIhfxbX2KKMJk7LeObAzUkm"] <- "cIhfxbX2KKMJk7LeObAzU" # removing "km" added to the id
+ws_cat_responses$idx[ws_cat_responses$idx == "L3p3bjQACfa7DJwkqJTmxxyz"] <- "L3p3bjQACfa7DJwkqJTmx" # removing "xyz" added to the id
+
 cdi_adaptive(ws_cat_responses) -> ws_cat_results
 inner_join(ws_cat_results, ws_scores, by = "id") -> ws_comparisons
+
+# rename end_date.x and end_date.y
+ws_comparisons <- ws_comparisons %>%
+  rename(end_date_cat = end_date.x,
+         end_date_ws = end_date.y)
+
+# time between ws and cat testing
+ws_comparisons <- ws_comparisons %>%
+  mutate(days_between = floor(interval(end_date_ws, end_date_cat)/ days(1)))
+
+# Exclude test children
+library(DBI)
+library(RMySQL)
+sw = dbConnect(MySQL(),
+               dbname="xxx",
+               username="xxx",
+               password="xxx",
+               host="xxx",
+               port = xxx)
+
+dbSendQuery(sw, "SET NAMES utf8")
+
+sw_kids <- dbGetQuery(sw,
+                     "SELECT child.family_id, childlanguage.child_id, child.child_hash, user.test
+                      FROM child, childlanguage, user
+                      WHERE child.pk = childlanguage.child_id AND user.family_id = child.family_id")
+sw_kids <- unique(sw_kids)
+
+ws_comparisons <- merge(ws_comparisons, sw_kids, by.x = "id", by.y = "child_hash", all.x = T)
+ws_comparisons <- ws_comparisons %>% filter(is.na(test))
+
+# Did the same person (e.g. mother / father) fill in both the ws and cat?
+ws_guardian <- ws_responses %>% filter(answer_id == "guardian") %>% select(id, answer1) %>% rename(guardian_ws = answer1)
+ws_comparisons <- merge(ws_comparisons, ws_guardian, by = "id", all.x = T) %>% unique()
+ws_comparisons <- ws_comparisons %>% relocate(guardian_ws, .after = guardian) %>%
+  rename(guardian_cat = guardian)
+
 ```
 
-Seems like there are multiple entries for the same ID.
-Should be cleaned...
+## Words and Sentences
+
+Correlation on full data:
+```{r}
+ws_comparisons <- ws_comparisons %>% unique()
+ws_comparisons %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+Correlation - exlcuding children with time between testing longer than 7 days (n = 38):
+```{r}
+ws_comparisons %>%
+  filter(days_between > -8 & days_between < 8) %>% 
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+Correlation - exlcuding children with time between testing longer than 10 days (n = 72):
+```{r}
+ws_comparisons %>%
+  filter(days_between > -11 & days_between < 11) %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+
+```
+
+There is one case where the guardians don't match (and there's only 7 days between testings) - to be excluded!
+
+## Data preparation - WG
 
 **Better check the procedure below:**
 
@@ -72,6 +145,10 @@ cdi_count_manyCheckboxGroups(wg_responses, "word", answer = "both") %>%
      full_join(wg_u_scores) %>% full_join(wg_p_scores) %>%
      mutate(score = U_score + score - both_score) %>%
      select(id, end_date, score) -> wg_u_scores
+cdi_count_oneCheckboxGroup(wg_responses, type = "gestures")%>%
+     rename(score = n) %>% select(id, end_date, score) -> wg_g_scores
+
+
 
 # Get CAT data:
 cdi_read("cdi", "wg-cat_pl_adaptive") -> wg_cat_responses
@@ -81,9 +158,90 @@ wg_cat_results %>% filter(group == "rozumienie") %>%
      inner_join(wg_u_scores, by = "id") -> wg_u_comparisons
 wg_cat_results %>% filter(group == "mowa") %>%
      inner_join(wg_p_scores, by = "id") -> wg_p_comparisons
+wg_cat_results %>% filter(group == "gesty") %>%
+     inner_join(wg_g_scores, by = "id") -> wg_g_comparisons
+
+wg_comparisons <- rbind(wg_u_comparisons, wg_p_comparisons, wg_g_comparisons)
+
+# rename end_date.x and end_date.y
+wg_comparisons <- wg_comparisons %>%
+  rename(end_date_cat = end_date.x,
+         end_date_ws = end_date.y)
+
+# time between ws and cat testing
+wg_comparisons <- wg_comparisons %>%
+  mutate(days_between = floor(interval(end_date_ws, end_date_cat)/ days(1)))
+
+# Exclude test children
+wg_comparisons <- merge(wg_comparisons, sw_kids, by.x = "id", by.y = "child_hash", all.x = T)
+wg_comparisons <- wg_comparisons %>% filter(is.na(test))
+
+# Did the same person (e.g. mother / father) fill in both the ws and cat?
+wg_guardian <- wg_responses %>% filter(answer_id == "guardian") %>% select(id, answer1) %>% rename(guardian_wg = answer1)
+wg_comparisons <- merge(wg_comparisons, wg_guardian, by = "id", all.x = T) %>% unique()
+wg_comparisons <- wg_comparisons %>% relocate(guardian_wg, .after = guardian) %>%
+  rename(guardian_cat = guardian)
+
 ```
 
-Seems like there are multiple entries for the same ID.
-Should be cleaned...
+## Words and Gestures 
 
-Also, the number of IDs with both *full* and *adaptive* submissions is surprisingly low.
+Understanding - correlation on full data
+```{r}
+wg_comparisons <- wg_comparisons %>% unique()
+wg_comparisons %>%
+  filter(group == "rozumienie") %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+Understanding - excluding children with time between testing longer than 10 days (n = 17)
+Btw. Why there is one more child here, relative to samples below?
+```{r}
+library(knitr)
+wg_comparisons %>%
+  filter(group == "rozumienie") %>%
+  filter(days_between > -11 & days_between < 11) %>% 
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+
+Production - correlation on full data
+```{r}
+wg_comparisons <- wg_comparisons %>% unique()
+wg_comparisons %>%
+  filter(group == "mowa") %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+Production - excluding children with time between testing longer than 10 days (n = 16)
+```{r}
+wg_comparisons %>%
+  filter(group == "mowa") %>%
+  filter(days_between > -11 & days_between < 11) %>% 
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+Gestures - correlation on full data
+```{r}
+wg_comparisons <- wg_comparisons %>% unique()
+wg_comparisons %>%
+  filter(group == "gesty") %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+Gestures - excluding children with time between testing longer than 10 days (n = 16)
+```{r}
+wg_comparisons %>%
+  filter(group == "gesty") %>%
+  filter(days_between > -11 & days_between < 11) %>% 
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+```
+
+
+

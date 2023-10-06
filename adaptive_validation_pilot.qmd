@@ -61,17 +61,10 @@ ws_comparisons <- ws_comparisons %>%
   mutate(days_between = floor(interval(end_date_ws, end_date_cat)/ days(1)))
 
 # Exclude test children
+
+sw <- multilada_connect(database = "starwords", prompt = "Database")
+
 library(DBI)
-library(RMySQL)
-sw = dbConnect(MySQL(),
-               dbname="xxx",
-               username="xxx",
-               password="xxx",
-               host="xxx",
-               port = xxx)
-
-dbSendQuery(sw, "SET NAMES utf8")
-
 sw_kids <- dbGetQuery(sw,
                      "SELECT child.family_id, childlanguage.child_id, child.child_hash, user.test
                       FROM child, childlanguage, user

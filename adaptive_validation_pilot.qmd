@@ -66,10 +66,29 @@ sw <- multilada_connect(database = "starwords", prompt = "Database")
 
 library(DBI)
 sw_kids <- dbGetQuery(sw,
-                     "SELECT child.family_id, childlanguage.child_id, child.child_hash, user.test
+                     "SELECT child.family_id, childlanguage.child_id, child.child_hash, user.test, childlanguage.language_id
                       FROM child, childlanguage, user
                       WHERE child.pk = childlanguage.child_id AND user.family_id = child.family_id")
-sw_kids <- unique(sw_kids)
+sw_kids <- unique(sw_kids) # doublets: if child hears more than one language, we have two rows, one for each language_id
+
+# add new column (language_id_n) for each language of a child
+kids_lang <- sw_kids %>%
+  select(child_hash, language_id)
+kids_lang <- kids_lang %>%
+  filter(!is.na(child_hash)) %>%
+  group_by(child_hash) %>%
+  mutate(language_id = 1:n()) %>%
+  ungroup() %>%
+  pivot_wider(values_from = language_id,
+              names_from  = language_id,
+              names_prefix = 'language_id_')
+
+# count languages per child
+kids_lang <- kids_lang %>%
+  mutate(nr_lang =(rowSums(!is.na(kids_lang[,2:8]))))
+
+# add nr_lang to sw_kids data frame and remove double rows
+sw_kids <- merge(sw_kids, kids_lang[,c("child_hash", "nr_lang")], by = "child_hash", all.x = T) %>% select(-language_id) %>% unique()
 
 ws_comparisons <- merge(ws_comparisons, sw_kids, by.x = "id", by.y = "child_hash", all.x = T)
 ws_comparisons <- ws_comparisons %>% filter(is.na(test))
@@ -80,9 +99,12 @@ ws_comparisons <- merge(ws_comparisons, ws_guardian, by = "id", all.x = T) %>% u
 ws_comparisons <- ws_comparisons %>% relocate(guardian_ws, .after = guardian) %>%
   rename(guardian_cat = guardian)
 
+
 ```
 
 ## Words and Sentences
+
+### Correlations with different time between testings
 
 Correlation on full data:
 ```{r}
@@ -92,7 +114,7 @@ ws_comparisons %>%
   correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
 ```
 
-Correlation - exlcuding children with time between testing longer than 7 days (n = 38):
+Correlation - excluding children with time between testing longer than 7 days (n = 38):
 ```{r}
 ws_comparisons %>%
   filter(days_between > -8 & days_between < 8) %>% 
@@ -100,7 +122,7 @@ ws_comparisons %>%
   correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
 ```
 
-Correlation - exlcuding children with time between testing longer than 10 days (n = 72):
+Correlation - excluding children with time between testing longer than 10 days (n = 72):
 ```{r}
 ws_comparisons %>%
   filter(days_between > -11 & days_between < 11) %>%
@@ -109,6 +131,52 @@ ws_comparisons %>%
 
 ```
 
+### Correlations with monolinguals vs. bilinguals
+
+Correlation - monolinguals (n = 61)
+```{r}
+ws_comparisons %>%
+  filter(days_between > -11 & days_between < 11) %>%
+  filter(nr_lang == 1) %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+
+```
+
+Correlation - bilinguals (n = 12)
+```{r}
+ws_comparisons %>%
+  filter(days_between > -11 & days_between < 11) %>%
+  filter(nr_lang > 1) %>%
+  select(score, theta) %>%
+  correlate(use = "pairwise.complete.obs", method = "spearman") %>% kable()
+
+```
+
+### SE with monolinguals vs. bilinguals
+Do the groups (bil, mono) differ in SE on their estimates?
+
+```{r}
+ws_comparisons <- ws_comparisons %>%
+  mutate(lang_group = ifelse(nr_lang == 1, "monolingual", "bilingual"))
+
+var.test(ws_comparisons$se_theta ~ ws_comparisons$lang_group)
+t.test(ws_comparisons$se_theta ~ ws_comparisons$lang_group)
+```
+
+### Nr of items administered to bilinguals vs. monolinguals
+```{r}
+var.test(ws_comparisons$no_items ~ ws_comparisons$lang_group)
+t.test(ws_comparisons$no_items ~ ws_comparisons$lang_group)
+
+```
+**Summary**:      
+1. Slightly lower correlations between full-item and CAT for bilinguals (but also smaller sample, n = 12 vs. n = 61).     
+2. No difference between bilinguals and monolinguals on SE of the estimates.    
+3. Sig. difference between the groups on nr of items administered in CAT - more items administered to monolinguals (again, bigger sample).      
+
+  
+### To do:
 There is one case where the guardians don't match (and there's only 7 days between testings) - to be excluded!
 
 ## Data preparation - WG
